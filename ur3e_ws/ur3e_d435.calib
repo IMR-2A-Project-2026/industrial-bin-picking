@@ -1,0 +1,20 @@
+parameters:
+  name: ur3e_d435
+  calibration_type: eye_in_hand
+  robot_base_frame: base_link
+  robot_effector_frame: tool0
+  tracking_base_frame: camera_color_optical_frame
+  tracking_marker_frame: aruco_marker_frame
+  freehand_robot_movement: true
+  move_group_namespace: /
+  move_group: manipulator
+transform:
+  translation:
+    x: 0.07035858523181109
+    y: -0.03786070717680278
+    z: 0.03091576198336038
+  rotation:
+    x: -0.006237947432436568
+    y: -0.0006472618464794522
+    z: 0.6941468239226309
+    w: 0.7198061238292268

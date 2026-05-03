@@ -1,0 +1,37 @@
+sudo apt update
+sudo apt install ros-humble-ur-robot-driver
+
+ros2 control list_controllers
+
+ros2 run controller_manager spawner scaled_joint_trajectory_controller
+
+ros2 launch ur_calibration calibration_correction.launch.py \
+  robot_ip:=192.168.1.102 \
+  target_filename:="${HOME}/ur3e_ws/src/my_robot_calibration.yaml"
+  
+ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur3e robot_ip:=192.168.1.102
+
+ros2 launch ur_moveit_config ur_moveit.launch.py ur_type:=ur3e launch_rviz:=false
+
+
+MOVEIT
+
+sudo apt update
+sudo apt install ros-humble-moveit-servo ros-humble-moveit-visual-tools
+
+sudo ufw disable
+
+sudo apt update
+sudo apt install ros-humble-ros2controlcli
+
+source /opt/ros/humble/setup.bash
+
+terminal 1 : 
+
+terminal 2 : 
+ros2 launch realsense2_camera rs_launch.py
+terminal 3 : 
+ros2 run tf2_ros static_transform_publisher 0 0 1 0 0 0 base_link camera_link
+terminal 4 : 
+
+terminal 5 : 

@@ -1,0 +1,984 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{fancyhdr}
+\usepackage{lmodern}
+
+\geometry{margin=2.5cm}
+
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+
+% ── Table of contents depth ──────────────────────────────────
+\setcounter{tocdepth}{2}
+
+% ── Verbatim-like command for file/package names ─────────────
+\newcommand{\pkg}[1]{\texttt{\textbf{#1}}}
+\newcommand{\file}[1]{\texttt{#1}}
+\newcommand{\topic}[1]{\texttt{\small #1}}
+
+% ── Purpose box: indented italic block ───────────────────────
+\newenvironment{filebox}{%
+  \par\vspace{0.3em}\begin{quote}\itshape
+}{%
+  \end{quote}\vspace{0.3em}%
+}
+
+% ── Fancyhdr ─────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small UR3e Workspace --- Source Documentation}
+\lhead{\small \texttt{ur3e\_ws/src}}
+\cfoot{\thepage}
+
+% ─────────────────────────────────────────────────────────────
+\begin{document}
+
+% ── Title page ───────────────────────────────────────────────
+\begin{titlepage}
+  \centering
+  \vspace*{3cm}
+  {\Huge\bfseries UR3e Workspace}\par
+  \vspace{0.5em}
+  {\Large Source Package Documentation}\par
+  \vspace{2em}
+  {\large\texttt{ur3e\_ws/src/}}\par
+  \vspace{3em}
+  \noindent\rule{\linewidth}{0.6pt}\par
+  \vspace{0.5em}
+  \begin{minipage}{0.85\linewidth}
+    \centering
+    This document describes every file and package inside the
+    \texttt{src/} directory of the UR3e ROS\,2 workspace.
+    The workspace implements a complete pick-and-place pipeline:
+    \textbf{UR3e arm} $+$ \textbf{RealSense D435 camera} $+$
+    \textbf{YOLO shoe detection} $+$ \textbf{MoveIt\,2 motion planning},
+    with support for two gripper configurations
+    (Robotiq\,2F-85 and OnRobot\,2FG7).
+  \end{minipage}\par
+  \vspace{0.5em}
+  \noindent\rule{\linewidth}{0.6pt}\par
+  \vfill
+  {\small May 2026}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ═══════════════════════════════════════════════════════════════
+\section{Project Overview}
+% ═══════════════════════════════════════════════════════════════
+
+The workspace targets the \textbf{Universal Robots UR3e} collaborative arm
+equipped with a \textbf{Intel RealSense D435} RGB-D camera mounted on the
+end-effector. The main goal is to autonomously pick shoes from an unstructured
+workspace by detecting the shoe's lacing hole with a YOLO segmentation model,
+computing a 3-D grasp point in robot-frame coordinates, and executing a
+pick-and-place motion with MoveIt\,2.
+
+\subsection*{Data flow}
+
+\begin{enumerate}
+  \item The \textbf{RealSense camera node} publishes colour and depth frames.
+  \item The \textbf{GraspDetector} (\file{shoe\_detector}) runs YOLO on each
+        frame, extracts the ``hole'' segmentation mask, computes the grasp
+        centre via PCA, back-projects to 3-D with the RealSense depth,
+        transforms to \texttt{base\_link} and publishes
+        \topic{/shoe\_detector/grasp\_point\_base}.
+  \item \textbf{pick\_and\_place\_grasp.py} subscribes to that topic,
+        collects a median of several samples to filter noise, then commands
+        the UR3e through a full pick-and-place sequence via MoveIt\,2.
+  \item The \textbf{hand-eye calibration} (done once with \pkg{easy\_handeye2})
+        supplies the static TF between \texttt{tool0} and
+        \texttt{camera\_color\_optical\_frame}, enabling the
+        depth-to-robot-frame transform at step~2.
+\end{enumerate}
+
+\subsection*{Package map}
+
+\begin{center}
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Category} & \textbf{Packages} \\
+\hline
+Custom (your code) &
+  \pkg{ur\_sim}, \pkg{shoe\_detector}, \pkg{ur\_moveit}, \pkg{ur\_gripper\_moveit} \\
+Robot driver &
+  \pkg{Universal\_Robots\_ROS2\_Driver} (7 sub-packages) \\
+Robot description &
+  \pkg{Universal\_Robots\_ROS2\_Description} \\
+Simulation &
+  \pkg{Universal\_Robots\_ROS2\_GZ\_Simulation}, \pkg{gz\_ros2\_control} \\
+Control framework &
+  \pkg{ros2\_control} (10 sub-packages) \\
+Perception &
+  \pkg{aruco\_ros} (aruco + aruco\_msgs + aruco\_ros) \\
+Calibration &
+  \pkg{easy\_handeye2} (easy\_handeye2 + easy\_handeye2\_msgs) \\
+Gripper (Robotiq) &
+  \pkg{ros2\_robotiq\_gripper} \\
+Gripper (OnRobot) &
+  \pkg{onrobot\_2FG7\_gripper\_description} \\
+Motion planning API &
+  \pkg{pymoveit2} \\
+Gazebo assets &
+  \pkg{models} \\
+\hline
+\end{tabular}
+\end{center}
+
+\newpage
+% ═══════════════════════════════════════════════════════════════
+\section{Custom Packages}
+% ═══════════════════════════════════════════════════════════════
+
+These are the packages written specifically for this project.
+They contain all the application logic.
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{shoe\_detector} --- YOLO perception and grasp estimation}
+% ───────────────────────────────────────────────────────────────
+
+A ROS\,2 Python package that bridges the YOLO object-detection library
+(Ultralytics) with the ROS\,2 graph. It provides two independent nodes and
+one launch file.
+
+\subsubsection{\file{shoe\_detector/yolo\_node.py}}
+
+\begin{filebox}
+\textbf{Purpose:} Bare-bones object detection publisher. Runs YOLO on every
+incoming colour frame and republishes two things: a visually annotated image
+and a structured \texttt{Detection2DArray} message containing bounding boxes,
+class IDs, and confidence scores for all detected objects.
+\end{filebox}
+
+\begin{itemize}
+  \item Subscribes to \topic{/camera/camera/color/image\_raw}.
+  \item Loads the \file{.pt} model from a hard-coded path at startup.
+  \item Publishes annotated frames on \topic{/shoe\_detector/image\_annotated}.
+  \item Publishes detections on \topic{/shoe\_detector/detections}
+        (\texttt{vision\_msgs/Detection2DArray}).
+  \item Does \emph{not} use depth; it is a pure 2-D detector.
+  \item \textbf{Note:} the model path is hard-coded. Use
+        \file{grasp\_detector.py} for production, which accepts the path as
+        a ROS\,2 parameter.
+\end{itemize}
+
+\subsubsection{\file{shoe\_detector/grasp\_detector.py}}
+
+\begin{filebox}
+\textbf{Purpose:} Full perception pipeline. Detects the shoe lacing hole,
+computes a 6-DOF grasp point in the robot base frame, and publishes it so
+that the motion planning script can pick up and execute without any manual
+coordinate entry.
+\end{filebox}
+
+\textbf{Algorithm:}
+\begin{enumerate}
+  \item Time-synchronises the colour and aligned depth streams from the
+        RealSense using \texttt{message\_filters.ApproximateTimeSynchronizer}.
+  \item Runs YOLO segmentation inference; selects the highest-confidence
+        detection of class \texttt{target\_class} (default: \texttt{hole}).
+  \item Applies PCA to the binary segmentation mask to find the principal
+        and minor axes of the hole shape.
+  \item Marches along the \emph{minor} axis from the centre outward to find
+        the two rim contact points for the gripper fingers.
+  \item Reads the RealSense depth at the centre and both rim pixels, with
+        three fallback strategies when the hole interior returns no valid
+        depth (IR can fail on dark or transparent surfaces).
+  \item Back-projects all three pixels to 3-D camera-frame coordinates using
+        the pinhole model and the live \texttt{CameraInfo} intrinsics.
+  \item Transforms to \texttt{base\_link} via TF\,2 (requires the hand-eye
+        static TF to be running).
+  \item Publishes three \texttt{PointStamped} topics and a debug image:
+        \topic{/shoe\_detector/grasp\_point\_base} (centre),
+        \topic{/shoe\_detector/grasp\_left\_base},
+        \topic{/shoe\_detector/grasp\_right\_base}.
+\end{enumerate}
+
+\textbf{Configurable parameters (passed with \texttt{-{}-ros-args -p}):}
+
+\begin{center}
+\begin{tabular}{|l|l|p{6cm}|}
+\hline
+\textbf{Parameter} & \textbf{Default} & \textbf{Meaning} \\
+\hline
+\texttt{model\_path} & (required) & Path to the \texttt{.pt} YOLO weights \\
+\texttt{target\_class} & \texttt{hole} & YOLO class name to target \\
+\texttt{conf\_threshold} & \texttt{0.5} & Minimum detection confidence \\
+\texttt{color\_topic} & \texttt{/camera/.../color/image\_raw} & RGB input \\
+\texttt{depth\_topic} & \texttt{/camera/.../aligned\_depth...} & Depth input \\
+\texttt{show\_window} & \texttt{true} & Show OpenCV preview window \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsubsection{\file{shoe\_detector/\_\_init\_\_.py}}
+
+Empty marker file that makes \texttt{shoe\_detector/} a Python package,
+required by the \texttt{ament\_python} build system.
+
+\subsubsection{\file{models/best\_kaagle\_10mars.pt}}
+
+The trained YOLO segmentation weights ($\approx$5\,MB). Trained on a custom
+dataset containing shoe images with ``hole'' (lacing hole) and ``shoe'' class
+labels. The filename encodes the training date (10 March) and dataset origin
+(Kaggle).
+
+\subsubsection{\file{config/handeye.yaml}}
+
+Stores the hand-eye calibration result in the format produced by
+\pkg{easy\_handeye2}: the rigid transform from \texttt{tool0} to
+\texttt{camera\_color\_optical\_frame} as a translation + quaternion.
+Read at startup by \file{perception.launch.py} to publish the static TF.
+
+\subsubsection{\file{launch/perception.launch.py}}
+
+\begin{filebox}
+\textbf{Purpose:} One-shot launch file for the entire perception stack on the
+real robot. Starts the RealSense camera and publishes the hand-eye TF.
+\end{filebox}
+
+Launches two things:
+\begin{itemize}
+  \item \textbf{RealSense\,2 camera} via \file{rs\_launch.py}, configured for
+        $640\times480$ @ 30\,fps, with depth-to-colour alignment and point cloud
+        enabled. Camera TF publication is disabled (\texttt{publish\_tf:=false})
+        because the hand-eye transform supplies the camera pose instead.
+  \item \textbf{Static TF publisher} (\texttt{tf2\_ros}) that broadcasts the
+        hard-coded hand-eye calibration result (translation + quaternion),
+        placing \texttt{camera\_color\_optical\_frame} relative to \texttt{tool0}.
+\end{itemize}
+
+\subsubsection{\file{setup.py} and \file{setup.cfg}}
+
+Standard \texttt{ament\_python} build files. \file{setup.py} declares the
+package name, entry points for the two nodes (\texttt{yolo\_node} and
+\texttt{grasp\_detector}), and lists the data files (model weights, config,
+launch files) to install.
+
+\subsubsection{\file{setup.py.save}}
+
+Leftover backup of \file{setup.py} created by a text editor.
+Not used; safe to delete.
+
+\subsubsection{\file{shoe\_detector/\_\_pycache\_\_/}}
+
+Python bytecode cache. Automatically regenerated; safe to delete.
+
+\subsubsection{\file{test/test\_copyright.py}, \file{test\_flake8.py}, \file{test\_pep257.py}}
+
+Auto-generated linting tests created by the \texttt{ament\_python} package
+template. They check licence headers, PEP\,8 compliance, and docstring
+formatting. They do not test application logic.
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{ur\_sim} --- Simulation launch files and motion scripts}
+% ───────────────────────────────────────────────────────────────
+
+The central custom package. Contains all URDF/Xacro robot descriptions for
+the simulation, Gazebo world files, controller configurations, and every
+Python motion script.
+
+\subsubsection{URDF / Xacro files (\file{urdf/})}
+
+\begin{description}
+  \item[\file{ur3e.urdf.xacro}]
+    Top-level robot description for the bare UR3e (no gripper). Includes
+    the UR3e kinematics macro and the ROS\,2 control interface. Used by
+    \file{spawn\_ur3e.launch.py}.
+
+  \item[\file{ur3e\_macro.xacro}]
+    Kinematics macro for the UR3e body: link geometry, inertia, collision
+    meshes, and joint limits. Parametrised so it can be composed with
+    different end-effectors.
+
+  \item[\file{ur3e.ros2\_control.xacro}]
+    Declares the \texttt{ros2\_control} hardware interface for the bare arm.
+    Switches between the real Gazebo Ignition hardware plugin
+    (\texttt{ign\_ros2\_control/IgnitionSystem}) and the mock hardware
+    interface depending on the \texttt{sim\_ignition} argument.
+
+  \item[\file{ur3e\_gripper.urdf.xacro}]
+    Top-level description for the UR3e with the \textbf{OnRobot 2FG7} gripper
+    attached. Composes the arm macro with the OnRobot xacro and a combined
+    \texttt{ros2\_control} block covering both the arm and the gripper.
+    Used by \file{spawn\_ur3e\_gripper.launch.py}.
+
+  \item[\file{robotiq\_2f\_85\_gripper.urdf.xacro}]
+    Standalone top-level description for the \textbf{Robotiq 2F-85} gripper,
+    assembled from the macro below.
+
+  \item[\file{robotiq\_2f\_85\_macro.urdf.xacro}]
+    Parametric macro defining the Robotiq 2F-85 link/joint geometry.
+    Imported by the gripper description and by other compositions.
+
+  \item[\file{2f\_85.ros2\_control.xacro}]
+    ROS\,2 control hardware interface block for the Robotiq 2F-85 gripper,
+    wiring it to the \texttt{robotiq\_2f\_85\_gripper\_hardware} plugin.
+\end{description}
+
+\subsubsection{Gazebo world files (\file{worlds/})}
+
+\begin{description}
+  \item[\file{ur3e\_on\_table.sdf}]
+    The main simulation world: a table surface, ambient lighting, and gravity.
+    Spawns the robot on top of the table at the same height as the real setup.
+
+  \item[\file{cubes.sdf}]
+    World containing several coloured cubes for basic pick-and-place testing
+    (no shoe geometry).
+
+  \item[\file{cubes1.sdf}]
+    Variant of \file{cubes.sdf} with a slightly different cube arrangement.
+\end{description}
+
+\subsubsection{Controller configuration (\file{config/})}
+
+\begin{description}
+  \item[\file{ur3e\_controllers.yaml}]
+    Controller manager configuration for the arm only: activates
+    \texttt{joint\_trajectory\_controller} (the arm trajectory controller used
+    by MoveIt\,2) and \texttt{joint\_state\_broadcaster}.
+
+  \item[\file{ur3e\_gripper\_controllers.yaml}]
+    Same as above but includes an additional controller entry for the gripper.
+
+  \item[\file{initial\_positions.yaml}]
+    Defines the joint angles at which the robot spawns in Gazebo
+    (typically a safe upright posture).
+\end{description}
+
+\subsubsection{Launch files (\file{launch/})}
+
+\begin{description}
+  \item[\file{spawn\_ur3e.launch.py}]
+    Launches Gazebo with \file{ur3e\_on\_table.sdf}, spawns the bare UR3e,
+    starts \texttt{robot\_state\_publisher}, and activates the arm controllers.
+
+  \item[\file{spawn\_ur3e\_moveit.launch.py}]
+    Extends \file{spawn\_ur3e.launch.py} by also starting the MoveIt\,2
+    \texttt{move\_group} node using the \pkg{ur\_moveit} configuration.
+    This is the primary launch file for simulation-based pick-and-place.
+
+  \item[\file{spawn\_ur3e\_gripper.launch.py}]
+    Same as \file{spawn\_ur3e.launch.py} but spawns \file{ur3e\_gripper.urdf.xacro}
+    (UR3e + OnRobot 2FG7) and loads the gripper controllers.
+
+  \item[\file{spawn\_ur3e\_gripper\_moveit.launch.py}]
+    Extends the gripper spawn with MoveIt\,2, using the
+    \pkg{ur\_gripper\_moveit} configuration.
+
+  \item[\file{view\_ur3e.launch.py}]
+    Publishes the robot URDF and opens RViz for visual inspection of the bare
+    UR3e without Gazebo. Useful for checking URDF validity.
+
+  \item[\file{view\_ur3e\_gripper.launch.py}]
+    Same as above for the UR3e + OnRobot 2FG7 assembly.
+\end{description}
+
+\subsubsection{RViz configuration (\file{rviz/})}
+
+\begin{description}
+  \item[\file{view\_ur3e.rviz}]
+    Pre-configured RViz layout showing the robot model and TF tree.
+    Loaded by the \texttt{view\_*} launch files.
+\end{description}
+
+\subsubsection{Motion scripts (\file{scripts/})}
+
+All scripts communicate with MoveIt\,2 via \pkg{pymoveit2}. They target the
+\textbf{real robot} unless otherwise noted.
+
+\begin{description}
+
+  \item[\file{pick\_and\_place\_grasp.py}]
+    \textbf{(production script.)}
+    Full autonomous pick-and-place driven by the \pkg{shoe\_detector}
+    grasp estimation. Subscribes to \topic{/shoe\_detector/grasp\_point\_base},
+    collects a configurable number of samples and takes their spatial median
+    to filter detector noise, validates that the pose is inside the UR3e
+    workspace bounds, then executes a 9-step sequence:
+    home $\to$ approach $\to$ descend $\to$ close gripper $\to$ retreat
+    $\to$ safe transit $\to$ above drop $\to$ descend to drop $\to$
+    open gripper $\to$ home.
+    Includes a collision scene (table slab + camera-mount box) so MoveIt\,2
+    avoids collisions. Ignores the camera Z coordinate (too noisy for depth
+    sensing over the hole) and uses a fixed \texttt{PICK\_Z} instead.
+    Implements retry logic with up to 3 planning attempts per step and a
+    clean abort-to-home on failure.
+
+  \item[\file{pick\_and\_place.py}]
+    Earlier version of the pick-and-place with fixed (hard-coded) pick
+    coordinates. Does not subscribe to the shoe detector. Documents three
+    key bug-fixes discovered during development: wrong MoveIt\,2 group name,
+    table-collision false positives, and joint-angle wrap-around causing
+    \texttt{PATH\_TOLERANCE\_VIOLATED} errors.
+
+  \item[\file{stack.py}]
+    Simulation script for moving to a target Cartesian pose and picking up
+    a cube in Gazebo. Uses a TF\,2-based arrival check: reads the actual
+    \texttt{tool0} position from Gazebo and compares it to the commanded pose
+    rather than trusting MoveIt\,2's reported execution result. Requires
+    \texttt{use\_sim\_time:=true}.
+
+  \item[\file{tp\_ar.py}]
+    Joint-angle validation script for a kinematics lab exercise. Moves the
+    arm to a set of joint angles (specified in degrees in the script), then
+    reads back the real \texttt{tool0} position via TF\,2 and prints it so
+    the result can be compared with an Octave forward-kinematics calculation.
+
+  \item[\file{grasp\_test.py}]
+    Pick-and-place driven by the grasp detector --- an intermediate version
+    of \file{pick\_and\_place\_grasp.py} from before the median-filter and
+    workspace-validation logic was added. Superseded.
+
+  \item[\file{pick\_place\_test.py}]
+    Intermediate step between \file{pick\_and\_place.py} (fixed coords) and
+    \file{pick\_and\_place\_grasp.py} (detector-driven). Tests the full
+    9-step sequence with semi-fixed coordinates.
+
+  \item[\file{pick\_test.py}]
+    Minimal script that only executes the pick half (home $\to$ approach
+    $\to$ descend $\to$ close gripper), used to verify pick motion in
+    isolation.
+
+  \item[\file{stack\_old.py}]
+    Earlier iteration of \file{stack.py} without the TF\,2 arrival
+    verification. Superseded.
+
+  \item[\file{stack (copy).py}]
+    Unnamed copy of \file{stack.py} from a mid-development stage.
+    Identical in content; safe to delete.
+
+  \item[\file{stack\_bu\_new.py}]
+    Another intermediate version of the stacking script (\textit{bu} = backup).
+    Safe to delete.
+
+  \item[\file{sb.py} and \file{sb2.py}]
+    Sandbox scripts used during early development to test individual
+    \pkg{pymoveit2} API calls (move to pose, move to joints,
+    \texttt{wait\_until\_executed}).
+    Safe to delete.
+
+  \item[\file{test.py} and \file{test\_move.py}]
+    Minimal test programs for single-arm movements written at the start of
+    development. Not part of any pipeline. Safe to delete.
+
+\end{description}
+
+\subsubsection{\file{package.xml} and \file{CMakeLists.txt}}
+
+Standard ROS\,2 package manifest and CMake file. \file{package.xml} declares
+dependencies on \texttt{pymoveit2}, \texttt{moveit\_ros\_planning\_interface},
+\texttt{ur\_description}, \texttt{ros\_gz\_sim}, and the gripper packages.
+\file{CMakeLists.txt} installs launch files, config, scripts, and URDF assets.
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{ur\_moveit} --- MoveIt\,2 configuration (arm only)}
+% ───────────────────────────────────────────────────────────────
+
+A MoveIt\,2 Setup-Assistant-generated package that configures motion
+planning for the \textbf{bare UR3e} (no gripper). Used by
+\file{spawn\_ur3e\_moveit.launch.py}.
+
+\subsubsection{Config files (\file{config/})}
+
+\begin{description}
+  \item[\file{ur.urdf.xacro}]
+    Entry-point URDF for MoveIt\,2. Parametrised to work with both the real
+    driver and the Gazebo Ignition hardware interface via the
+    \texttt{sim\_ignition} argument.
+
+  \item[\file{ur.srdf}]
+    Semantic Robot Description Format. Defines the planning group
+    \texttt{ur\_manipulator} (all six arm joints), the home position, and
+    lists self-collision pairs that can be safely ignored.
+
+  \item[\file{ur.ros2\_control.xacro}]
+    Hardware interface declaration consumed by the MoveIt\,2 configuration
+    builder to wire controllers to planning groups.
+
+  \item[\file{kinematics.yaml}]
+    Specifies the IK solver plugin and parameters.
+    Uses \texttt{kdl\_kinematics\_plugin/KDLKinematicsPlugin} for the
+    \texttt{ur\_manipulator} group.
+
+  \item[\file{ompl\_planning.yaml}]
+    OMPL planner configurations: planner list, goal tolerances, planning
+    time limits, and per-planner parameters such as range and goal bias.
+
+  \item[\file{moveit\_controllers.yaml}]
+    Maps MoveIt\,2 controller handles to the underlying
+    \texttt{ros2\_control} controllers (the \texttt{joint\_trajectory\_controller}).
+
+  \item[\file{ros2\_controllers.yaml}]
+    Controller manager configuration used when MoveIt\,2 spawns its own
+    controller manager (demo mode, without an external driver).
+
+  \item[\file{joint\_limits.yaml}]
+    Per-joint velocity and acceleration limits applied by MoveIt\,2 during
+    trajectory scaling.
+
+  \item[\file{initial\_positions.yaml}]
+    Starting joint angles for the MoveIt\,2 fake controller (demo mode).
+
+  \item[\file{chomp\_planning.yaml}, \file{lerp\_planning.yaml}, \file{trajopt\_planning.yaml}, \file{pilz\_industrial\_motion\_planner\_planning.yaml}, \file{pilz\_cartesian\_limits.yaml}]
+    Configuration for alternative planners (CHOMP, LERP, TrajOpt, Pilz)
+    generated by the Setup Assistant.
+
+  \item[\file{moveit.rviz}]
+    RViz configuration with the MoveIt\,2 Motion Planning panel pre-loaded.
+\end{description}
+
+\subsubsection{Launch files (\file{launch/})}
+
+\begin{description}
+  \item[\file{demo.launch.py}]
+    All-in-one demo launcher: starts \texttt{robot\_state\_publisher},
+    \texttt{move\_group}, RViz, and a fake joint-state publisher.
+    Does not require Gazebo or a real robot; useful for testing the SRDF and
+    planner configuration.
+
+  \item[\file{move\_group.launch.py}]
+    Starts only the \texttt{move\_group} node. Intended to be included by
+    other launch files such as \file{spawn\_ur3e\_moveit.launch.py}.
+
+  \item[\file{moveit\_rviz.launch.py}]
+    Opens RViz pre-configured with the MoveIt\,2 Motion Planning panel.
+
+  \item[\file{rsp.launch.py}]
+    Starts the \texttt{robot\_state\_publisher} with the URDF from this
+    package (RSP = Robot State Publisher).
+
+  \item[\file{spawn\_controllers.launch.py}]
+    Spawns and activates the ROS\,2 controllers listed in
+    \file{ros2\_controllers.yaml} via the controller manager service.
+
+  \item[\file{static\_virtual\_joint\_tfs.launch.py}]
+    Publishes static TF transforms for virtual joints defined in the SRDF
+    (e.g.\ world $\to$ base\_link).
+
+  \item[\file{setup\_assistant.launch.py}]
+    Re-opens the MoveIt\,2 Setup Assistant pre-loaded with this package,
+    for iterative configuration editing.
+
+  \item[\file{warehouse\_db.launch.py}]
+    Starts the MongoDB warehouse used to persist MoveIt\,2 scenes and motion
+    plans across sessions.
+\end{description}
+
+\subsubsection{\file{.setup\_assistant}}
+
+Binary metadata file written by the MoveIt\,2 Setup Assistant.
+Not edited manually.
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{ur\_gripper\_moveit} --- MoveIt\,2 configuration (arm + OnRobot 2FG7)}
+% ───────────────────────────────────────────────────────────────
+
+Identical in structure to \pkg{ur\_moveit} but generated for the
+\textbf{UR3e + OnRobot 2FG7 gripper} assembly. The SRDF defines two planning
+groups: \texttt{ur\_manipulator} (the six arm joints) and \texttt{gripper}
+(the 2FG7 finger joints). Loaded by
+\file{spawn\_ur3e\_gripper\_moveit.launch.py}.
+
+All files (\file{config/*.yaml}, \file{config/ur.srdf}, \file{launch/*.py})
+serve the same roles as their equivalents in \pkg{ur\_moveit}; refer to
+that section for descriptions. The key differences are:
+\begin{itemize}
+  \item \file{ur.urdf.xacro} includes the OnRobot 2FG7 xacro.
+  \item \file{ur.srdf} adds the \texttt{gripper} planning group and new
+        collision-exclusion pairs for the gripper links.
+  \item \file{moveit\_controllers.yaml} maps a second controller handle for
+        the gripper.
+\end{itemize}
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{models/class\_table} --- Gazebo world model}
+% ───────────────────────────────────────────────────────────────
+
+An SDFormat model of a table used in the Gazebo world files.
+
+\begin{description}
+  \item[\file{model.config}]
+    Model metadata (name, version, description) read by the Gazebo model
+    database.
+  \item[\file{model.sdf}]
+    Geometry and physics: a flat rectangular surface with collision and
+    visual geometry.
+  \item[\file{meshes/}]
+    \texttt{.dae} or \texttt{.stl} mesh assets referenced by the SDF.
+  \item[\file{materials/}]
+    Ogre material scripts for the table surface texture.
+\end{description}
+
+Referenced by \file{ur3e\_on\_table.sdf} as a \texttt{<include>} directive.
+
+\newpage
+% ═══════════════════════════════════════════════════════════════
+\section{Upstream / Third-Party Packages}
+% ═══════════════════════════════════════════════════════════════
+
+These packages are not original code but are vendored in \file{src/}
+because either a specific (patched) version is required, or the package
+is not available as an \texttt{apt} binary for this ROS\,2 Humble
+installation.
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{Universal\_Robots\_ROS2\_Driver} --- UR robot driver}
+% ───────────────────────────────────────────────────────────────
+
+The official Universal Robots ROS\,2 driver. Contains seven sub-packages:
+
+\begin{center}
+\begin{tabular}{|l|p{9cm}|}
+\hline
+\textbf{Sub-package} & \textbf{Role} \\
+\hline
+\pkg{ur\_robot\_driver} &
+  Main driver node. Opens a TCP connection to the UR controller,
+  streams joint states at 500\,Hz, and executes trajectories sent by
+  MoveIt\,2 via the \texttt{scaled\_joint\_trajectory\_controller}. \\
+\hline
+\pkg{ur\_bringup} &
+  Top-level launch files for the real robot
+  (\file{ur\_control.launch.py}, \file{ur\_moveit.launch.py}). \\
+\hline
+\pkg{ur\_calibration} &
+  Reads the robot-specific DH parameter correction from the UR controller
+  and saves it as \file{my\_ur3e\_calibration.yaml}. \\
+\hline
+\pkg{ur\_controllers} &
+  Custom ROS\,2 controllers: speed scaling, GPIO, force-torque, etc. \\
+\hline
+\pkg{ur\_moveit\_config} &
+  MoveIt\,2 configuration shipped with the driver (used by
+  \file{ur\_bringup/ur\_moveit.launch.py}). \\
+\hline
+\pkg{ur\_dashboard\_msgs} &
+  Custom message and service definitions for the UR Dashboard server
+  (power on/off, program load, etc.). \\
+\hline
+\pkg{ur} &
+  Meta-package that declares the dependency tree for the whole driver. \\
+\hline
+\end{tabular}
+\end{center}
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{Universal\_Robots\_ROS2\_Description} --- Robot URDF and meshes}
+% ───────────────────────────────────────────────────────────────
+
+Visual and collision meshes (\texttt{.dae}/\texttt{.stl}) plus Xacro macros
+for all UR robot models (UR3e, UR5e, UR10e, \ldots). This package is the
+single source of truth for the UR3e kinematics and geometry; both
+\pkg{ur\_moveit} and \pkg{ur\_sim} reference it via
+\texttt{\$(find ur\_description)}.
+
+This is the largest package by disk size ($\approx 70$\,MB) because it
+bundles high-resolution collision and visual meshes for every UR model.
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{Universal\_Robots\_ROS2\_GZ\_Simulation} --- Gazebo simulation}
+% ───────────────────────────────────────────────────────────────
+
+Contains the single sub-package \pkg{ur\_simulation\_gz}. Provides Gazebo
+Ignition launch files and SDF world configurations designed to work with
+the UR driver stack. \pkg{ur\_sim} extends and replaces the worlds from this
+package with project-specific ones (\file{ur3e\_on\_table.sdf}, etc.).
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{ros2\_control} --- ROS\,2 control framework}
+% ───────────────────────────────────────────────────────────────
+
+The core real-time control framework. Vendored here to pin a specific
+version. Contains ten sub-packages:
+
+\begin{center}
+\begin{tabular}{|l|p{9cm}|}
+\hline
+\textbf{Sub-package} & \textbf{Role} \\
+\hline
+\pkg{hardware\_interface} & Base classes for hardware plugins (actuator, sensor, system). \\
+\hline
+\pkg{controller\_interface} & Base class for all ROS\,2 controllers. \\
+\hline
+\pkg{controller\_manager} & Loads, starts, stops, and switches controllers at runtime. \\
+\hline
+\pkg{controller\_manager\_msgs} & Service/action definitions for the controller manager. \\
+\hline
+\pkg{joint\_limits} / \pkg{joint\_limits\_interface} &
+  Enforce joint position, velocity, and effort limits. \\
+\hline
+\pkg{transmission\_interface} & Maps actuator space to joint space (gear ratios, etc.). \\
+\hline
+\pkg{ros2controlcli} & Command-line tools (\texttt{ros2 control list\_controllers}, etc.). \\
+\hline
+\pkg{rqt\_controller\_manager} & rqt GUI plugin for managing controllers. \\
+\hline
+\pkg{ros2\_control\_test\_assets} & Shared URDF and config fixtures for unit tests. \\
+\hline
+\pkg{hardware\_interface\_testing} & Test helpers for hardware interface implementations. \\
+\hline
+\end{tabular}
+\end{center}
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{gz\_ros2\_control} --- Gazebo Ignition hardware interface}
+% ───────────────────────────────────────────────────────────────
+
+Bridges \pkg{ros2\_control} with Gazebo Ignition/Fortress. Contains:
+
+\begin{center}
+\begin{tabular}{|l|p{9cm}|}
+\hline
+\textbf{Sub-package} & \textbf{Role} \\
+\hline
+\pkg{gz\_ros2\_control} &
+  The \texttt{IgnitionSystem} hardware plugin. Reads joint positions from
+  the Gazebo physics simulation and applies torque commands from controllers. \\
+\hline
+\pkg{ign\_ros2\_control} & Compatibility shim for the older Ignition package name. \\
+\hline
+\pkg{gz\_ros2\_control\_demos} & Example robots demonstrating the plugin. \\
+\hline
+\pkg{ign\_ros2\_control\_demos} & Same demos under the legacy name. \\
+\hline
+\pkg{gz\_ros2\_control\_tests} & Integration tests. \\
+\hline
+\end{tabular}
+\end{center}
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{aruco\_ros} --- ArUco marker detection}
+% ───────────────────────────────────────────────────────────────
+
+ROS\,2 wrapper around the \texttt{aruco} C++ library. Used during
+hand-eye calibration to detect the ArUco marker fixed in the scene.
+
+\begin{center}
+\begin{tabular}{|l|p{9cm}|}
+\hline
+\textbf{Sub-package} & \textbf{Role} \\
+\hline
+\pkg{aruco} &
+  Standalone C++ library implementing ArUco marker detection and pose
+  estimation (no ROS dependency). Compiles to \texttt{libaruco.so}. \\
+\hline
+\pkg{aruco\_msgs} &
+  Custom message definitions: \texttt{Marker.msg} (ID, pose, confidence)
+  and \texttt{MarkerArray.msg}. \\
+\hline
+\pkg{aruco\_ros} &
+  ROS\,2 node (\texttt{aruco\_ros single}) that subscribes to an image
+  topic and camera info, detects one or multiple ArUco markers, and
+  publishes their poses as TF transforms and \texttt{Marker} messages. \\
+\hline
+\end{tabular}
+\end{center}
+
+During calibration the node is run as:
+\begin{verbatim}
+ros2 run aruco_ros single --ros-args \
+  -p marker_size:=0.100 -p marker_id:=582 \
+  -p camera_frame:=camera_color_optical_frame \
+  -p marker_frame:=aruco_marker_frame \
+  -r /image:=/camera/camera/color/image_raw
+\end{verbatim}
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{easy\_handeye2} --- Hand-eye calibration}
+% ───────────────────────────────────────────────────────────────
+
+Implements eye-in-hand hand-eye calibration (Tsai-Lenz or ANDREFF algorithm).
+Records robot end-effector poses and corresponding marker poses as the robot
+moves to different configurations, then solves for the camera-to-tool transform.
+
+\begin{center}
+\begin{tabular}{|l|p{9cm}|}
+\hline
+\textbf{Sub-package} & \textbf{Role} \\
+\hline
+\pkg{easy\_handeye2} &
+  Calibration server node, RViz and rqt GUIs, and \file{calibrate.launch.py}.
+  The result is saved to \file{ur3e\_d435.calib} at the workspace root. \\
+\hline
+\pkg{easy\_handeye2\_msgs} &
+  Custom service and message types used by the calibration protocol. \\
+\hline
+\end{tabular}
+\end{center}
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{ros2\_robotiq\_gripper} --- Robotiq 2F-85 driver}
+% ───────────────────────────────────────────────────────────────
+
+ROS\,2 driver and description for the Robotiq 2F-85 adaptive gripper.
+
+\begin{center}
+\begin{tabular}{|l|p{9cm}|}
+\hline
+\textbf{Sub-package} & \textbf{Role} \\
+\hline
+\pkg{robotiq\_description} &
+  URDF/Xacro macros and meshes for the 2F-85 gripper, used in the
+  Robotiq-based robot description in \pkg{ur\_sim}. \\
+\hline
+\pkg{robotiq\_controllers} &
+  ROS\,2 controller that sends gripper open/close commands over the
+  Modbus RTU or Ethernet interface to the physical gripper. \\
+\hline
+\end{tabular}
+\end{center}
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{onrobot\_2FG7\_gripper\_description} --- OnRobot 2FG7 description}
+% ───────────────────────────────────────────────────────────────
+
+URDF/Xacro macros and meshes for the OnRobot 2FG7 two-finger gripper.
+Referenced by \file{ur\_sim/urdf/ur3e\_gripper.urdf.xacro} and loaded by
+\pkg{ur\_gripper\_moveit}.
+
+\begin{itemize}
+  \item \file{urdf/onrobot\_2fg7.xacro} --- kinematic macro with finger links and joints.
+  \item \file{meshes/} --- \texttt{.stl} collision and visual meshes.
+  \item \file{config/} --- joint limit parameters.
+  \item \file{launch/} --- standalone view launch file.
+\end{itemize}
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{pymoveit2} --- Python MoveIt\,2 API}
+% ───────────────────────────────────────────────────────────────
+
+A pure-Python wrapper around the MoveIt\,2 ROS\,2 action and service
+interfaces. Exposes a simple \texttt{MoveIt2} class used by all motion
+scripts:
+
+\begin{verbatim}
+arm = MoveIt2(node, joint_names, base_link_name,
+              end_effector_name, group_name)
+arm.move_to_pose(pose)              # Cartesian goal
+arm.move_to_configuration(joints)  # Joint-space goal
+arm.wait_until_executed()
+\end{verbatim}
+
+Vendored in \file{src/} because the PyPI release lags behind the upstream
+repository and some API methods used here (e.g.\ \texttt{cartesian=True}
+keyword argument) require a specific commit.
+
+% ───────────────────────────────────────────────────────────────
+\subsection{\texttt{my\_robot\_calibration.yaml} (inside src/)}
+% ───────────────────────────────────────────────────────────────
+
+An earlier version of the UR3e kinematic calibration file stored inside
+\file{src/} instead of the workspace root. It appears to be a predecessor
+of \file{../my\_ur3e\_calibration.yaml} (the one referenced in the
+\file{commandes\_detection\_and\_p\&p} launch commands). Verify that both
+files contain the same calibration data before deleting this one.
+
+\newpage
+% ═══════════════════════════════════════════════════════════════
+\section{Summary Table}
+% ═══════════════════════════════════════════════════════════════
+
+\begin{longtable}{|p{5cm}|p{2.5cm}|p{7cm}|}
+\hline
+\textbf{File / Package} & \textbf{Type} & \textbf{Role} \\
+\hline
+\endfirsthead
+\hline
+\textbf{File / Package} & \textbf{Type} & \textbf{Role} \\
+\hline
+\endhead
+\hline
+\endfoot
+\hline
+\endlastfoot
+
+\pkg{shoe\_detector/yolo\_node.py} & Python node & 2-D YOLO detector, publishes bounding boxes \\
+\hline
+\pkg{shoe\_detector/grasp\_detector.py} & Python node & YOLO + PCA + depth $\to$ 3-D grasp point in \texttt{base\_link} \\
+\hline
+\file{shoe\_detector/config/handeye.yaml} & Config & Stored hand-eye calibration transform \\
+\hline
+\file{shoe\_detector/launch/perception.launch.py} & Launch & Starts camera + hand-eye TF for real-robot operation \\
+\hline
+\file{shoe\_detector/models/best\_kaagle\_10mars.pt} & ML weights & Trained YOLO segmentation model \\
+\hline
+\file{ur\_sim/urdf/ur3e.urdf.xacro} & URDF & UR3e (no gripper) top-level description \\
+\hline
+\file{ur\_sim/urdf/ur3e\_gripper.urdf.xacro} & URDF & UR3e + OnRobot 2FG7 top-level description \\
+\hline
+\file{ur\_sim/urdf/robotiq\_2f\_85\_*.xacro} & URDF & Robotiq 2F-85 macro and description \\
+\hline
+\file{ur\_sim/urdf/*.ros2\_control.xacro} & URDF & Hardware interface declarations \\
+\hline
+\file{ur\_sim/worlds/*.sdf} & World & Gazebo Ignition simulation worlds \\
+\hline
+\file{ur\_sim/config/*.yaml} & Config & Controller manager and initial pose config \\
+\hline
+\file{ur\_sim/launch/spawn\_*.launch.py} & Launch & Spawn robot in Gazebo (with/without MoveIt\,2) \\
+\hline
+\file{ur\_sim/launch/view\_*.launch.py} & Launch & Visualise URDF in RViz only \\
+\hline
+\file{ur\_sim/scripts/pick\_and\_place\_grasp.py} & Script & \textbf{Production:} detector-driven pick-and-place \\
+\hline
+\file{ur\_sim/scripts/pick\_and\_place.py} & Script & Fixed-coordinate pick-and-place (reference) \\
+\hline
+\file{ur\_sim/scripts/stack.py} & Script & Cube-stacking demo with TF\,2 arrival verification \\
+\hline
+\file{ur\_sim/scripts/tp\_ar.py} & Script & Joint-angle validation / IK lab tool \\
+\hline
+\file{ur\_sim/scripts/grasp\_test.py} & Dev script & Earlier grasp-driven pick-and-place prototype \\
+\hline
+\file{ur\_sim/scripts/pick\_place\_test.py} & Dev script & Intermediate pick-and-place prototype \\
+\hline
+\file{ur\_sim/scripts/pick\_test.py} & Dev script & Pick-only motion test \\
+\hline
+\file{ur\_sim/scripts/stack\_old.py} & Dev script & Superseded stacking script \\
+\hline
+\file{ur\_sim/scripts/stack (copy).py} & Dev script & Copy of stack.py; safe to delete \\
+\hline
+\file{ur\_sim/scripts/stack\_bu\_new.py} & Dev script & Backup of stack.py; safe to delete \\
+\hline
+\file{ur\_sim/scripts/sb.py}, \file{sb2.py} & Dev script & Sandbox snippets; safe to delete \\
+\hline
+\file{ur\_sim/scripts/test.py}, \file{test\_move.py} & Dev script & Early movement tests; safe to delete \\
+\hline
+\pkg{ur\_moveit} (all files) & MoveIt\,2 pkg & MoveIt\,2 config for bare UR3e \\
+\hline
+\pkg{ur\_gripper\_moveit} (all files) & MoveIt\,2 pkg & MoveIt\,2 config for UR3e + OnRobot 2FG7 \\
+\hline
+\pkg{Universal\_Robots\_ROS2\_Driver} & Upstream & Real robot TCP driver + controllers \\
+\hline
+\pkg{Universal\_Robots\_ROS2\_Description} & Upstream & UR3e URDF + meshes (source of truth) \\
+\hline
+\pkg{Universal\_Robots\_ROS2\_GZ\_Simulation} & Upstream & Gazebo base worlds for UR \\
+\hline
+\pkg{ros2\_control} & Upstream & Real-time controller framework \\
+\hline
+\pkg{gz\_ros2\_control} & Upstream & Gazebo Ignition hardware plugin \\
+\hline
+\pkg{aruco\_ros} & Upstream & ArUco marker detection (calibration) \\
+\hline
+\pkg{easy\_handeye2} & Upstream & Hand-eye calibration workflow \\
+\hline
+\pkg{ros2\_robotiq\_gripper} & Upstream & Robotiq 2F-85 driver + description \\
+\hline
+\pkg{onrobot\_2FG7\_gripper\_description} & Upstream & OnRobot 2FG7 URDF + meshes \\
+\hline
+\pkg{pymoveit2} & Upstream & Python MoveIt\,2 API \\
+\hline
+\pkg{models/class\_table} & Asset & Gazebo table SDF model \\
+\hline
+\file{my\_robot\_calibration.yaml} & Data & Earlier robot kinematics calibration (verify vs.\ root copy) \\
+\hline
+\end{longtable}
+
+\end{document}

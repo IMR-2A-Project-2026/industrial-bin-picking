@@ -1,0 +1,33 @@
+Terminal 1 — Driver UR3e
+source /opt/ros/humble/setup.bash
+source ~/ur3e_ws/install/setup.bash
+ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur3e robot_ip:=192.168.1.105
+
+Terminal 2 — Caméra Realsense
+source /opt/ros/humble/setup.bash
+source ~/ur3e_ws/install/setup.bash
+ros2 launch realsense2_camera rs_launch.py enable_color:=true enable_depth:=false rgb_camera.color_profile:=640x480x30
+
+
+Terminal 3 — Détection ArUco
+source /opt/ros/humble/setup.bash
+source ~/ur3e_ws/install/setup.bash
+ros2 run aruco_ros single --ros-args -p marker_size:=0.100 -p marker_id:=582 -p reference_frame:=camera_color_optical_frame -p camera_frame:=camera_color_optical_frame -p marker_frame:=aruco_marker_frame -r /image:=/camera/camera/color/image_raw -r /camera_info:=/camera/camera/color/camera_info
+
+
+Terminal 4 — Serveur easy_handeye2
+source /opt/ros/humble/setup.bash
+source ~/ur3e_ws/install/setup.bash
+ros2 launch easy_handeye2 calibrate.launch.py calibration_type:=eye_in_hand name:=ur3e_d435 robot_base_frame:=base_link robot_effector_frame:=tool0 tracking_base_frame:=camera_color_optical_frame tracking_marker_frame:=aruco_marker_frame
+
+
+Terminal 5 — GUI rqt_calibrator
+source /opt/ros/humble/setup.bash
+source ~/ur3e_ws/install/setup.bash
+ros2 run easy_handeye2 rqt_calibrator.py --force-discover --ros-args -p name:=ur3e_d435 -p calibration_type:=eye_in_hand -p robot_base_frame:=base_link -p robot_effector_frame:=tool0 -p tracking_base_frame:=camera_color_optical_frame -p tracking_marker_frame:=aruco_marker_frame
+
+
+Terminal 6 — Visualiser la détection
+source /opt/ros/humble/setup.bash
+source ~/ur3e_ws/install/setup.bash
+ros2 run rqt_image_view rqt_image_view /aruco_single/result

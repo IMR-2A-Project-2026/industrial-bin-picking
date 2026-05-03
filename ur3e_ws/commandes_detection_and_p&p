@@ -1,0 +1,19 @@
+1:
+ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur3e robot_ip:=192.168.1.102 kinematics_params_file:=$HOME/ur3e_config/my_ur3e_calibration.yaml launch_rviz:=false
+2:
+ros2 launch ur_moveit_config ur_moveit.launch.py ur_type:=ur3e launch_rviz:=true
+3:
+ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true
+4:
+ros2 run shoe_detector grasp_detector --ros-args -p model_path:=$HOME/ur3e_ws/src/shoe_detector/models/best_kaagle_10mars.pt -p target_class:=hole -p conf_threshold:=0.5
+5:
+cat ~/ur3e_ws/src/shoe_detector/config/*.yaml
+
+6 pas sur de celui-ci:(ce sont des valeurs donné par le terminal 5
+ros2 run tf2_ros static_transform_publisher --x 0.07035858523181109 --y -0.03786070717680278 --z 0.03091576198336038 --qx -0.006237947432436568 --qy -0.0006472618464794522 --qz 0.6941468239226309 --qw 0.7198061238292268 --frame-id tool0 --child-frame-id camera_color_optical_frame
+
+
+7:
+ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
+8:
+python3 ~/ur3e_ws/src/ur_sim/scripts/pick_and_place_grasp.py
