@@ -65,7 +65,7 @@ GROUP_NAME = "ur_manipulator"
 # ── Pick point (base_link frame) ────────────────────────────────────────
 PICK_X =  0.3 - 0.4       # -0.10 m
 PICK_Y = -0.3 - (-0.68)   #  0.38 m
-PICK_Z =  0.10             # ⚠️  safe start — lower in 2 cm steps after
+PICK_Z =  0.10             #  safe start — lower in 2 cm steps after
                            #     TCP echo confirms position
 
 APPROACH_CLEARANCE = 0.20  # metres above PICK_Z on descend
@@ -138,11 +138,11 @@ JOINT_STATE_TIMEOUT = 5.0
 # ═══════════════════════════════════════════════════════════════════════
 
 def gripper_close() -> None:
-    print("   🤏  [gripper] CLOSE  ← replace with real gripper call")
+    print(" [gripper] CLOSE  ← replace with real gripper call")
     time.sleep(0.5)
 
 def gripper_open() -> None:
-    print("   🖐   [gripper] OPEN   ← replace with real gripper call")
+    print(" [gripper] OPEN   ← replace with real gripper call")
     time.sleep(0.5)
 
 
@@ -252,7 +252,7 @@ def setup_collision_scene(arm: MoveIt2) -> None:
         position=[0.0, 0.0, TABLE_Z - 0.04],   # top face at TABLE_Z
         quat_xyzw=[0.0, 0.0, 0.0, 1.0],
     )
-    print(f"   🗺️   Table top face at Z={TABLE_Z:.3f} m  (no ceiling)")
+    print(f"    Table top face at Z={TABLE_Z:.3f} m  (no ceiling)")
     time.sleep(1.5)   # give planning scene time to process before first plan
 
 
@@ -300,7 +300,7 @@ def attach_camera_mount(node: Node) -> None:
     ]
 
     pub.publish(aco)
-    print(f"   📷  Camera mount attached  {CAMERA_MOUNT_SIZE}")
+    print(f"   Camera mount attached  {CAMERA_MOUNT_SIZE}")
     time.sleep(1.0)
 
 
@@ -314,15 +314,15 @@ def move_safe(node: Node, arm: MoveIt2, pose: Pose, label: str, retries: int = 3
             arm.move_to_pose(pose)
             result = arm.wait_until_executed()
             if result is False:
-                print(f"   [{label}] ❌  execution reported failure")
+                print(f"   [{label}]  execution reported failure")
                 time.sleep(2.0)
                 continue
-            print(f"   [{label}] ✅  reached")
+            print(f"   [{label}]  reached")
             return True
         except Exception as exc:
-            print(f"   [{label}] ❌  {str(exc)[:80]}")
+            print(f"   [{label}] {str(exc)[:80]}")
             time.sleep(2.0)
-    print(f"   [{label}] ⚠️   all retries exhausted")
+    print(f"   [{label}]  all retries exhausted")
     return False
 
 
@@ -339,19 +339,19 @@ def move_cartesian(node: Node, arm: MoveIt2, pose: Pose, label: str, retries: in
             try:
                 arm.move_to_pose(pose, cartesian=True)
             except TypeError:
-                print(f"   [{label}] ℹ️   cartesian= kwarg not supported; using standard planner")
+                print(f"   [{label}]  cartesian= kwarg not supported; using standard planner")
                 arm.move_to_pose(pose)
             result = arm.wait_until_executed()
             if result is False:
-                print(f"   [{label}] ❌  execution reported failure")
+                print(f"   [{label}]  execution reported failure")
                 time.sleep(2.0)
                 continue
-            print(f"   [{label}] ✅  reached")
+            print(f"   [{label}]  reached")
             return True
         except Exception as exc:
-            print(f"   [{label}] ❌  {str(exc)[:80]}")
+            print(f"   [{label}]  {str(exc)[:80]}")
             time.sleep(2.0)
-    print(f"   [{label}] ⚠️   all retries exhausted")
+    print(f"   [{label}]  all retries exhausted")
     return False
 
 
@@ -366,15 +366,15 @@ def move_joints(node: Node, arm: MoveIt2, joints: list, label: str, retries: int
             arm.move_to_configuration(joints)
             result = arm.wait_until_executed()
             if result is False:
-                print(f"   [{label}] ❌  execution reported failure")
+                print(f"   [{label}] execution reported failure")
                 time.sleep(2.0)
                 continue
-            print(f"   [{label}] ✅  reached")
+            print(f"   [{label}] reached")
             return True
         except Exception as exc:
-            print(f"   [{label}] ❌  {str(exc)[:80]}")
+            print(f"   [{label}] {str(exc)[:80]}")
             time.sleep(2.0)
-    print(f"   [{label}] ⚠️   all retries exhausted")
+    print(f"   [{label}]  all retries exhausted")
     return False
 
 
@@ -386,14 +386,14 @@ def move_home(node: Node, arm: MoveIt2, label: str = "home") -> bool:
     arm.move_to_configuration(HOME_JOINTS)
     result = arm.wait_until_executed()
     if result is False:
-        print(f"   [{label}] ❌  home move failed")
+        print(f"   [{label}] home move failed")
         return False
-    print(f"   [{label}] ✅  home reached")
+    print(f"   [{label}]  home reached")
     return True
 
 
 def abort(node: Node, arm: MoveIt2, spin_thread: threading.Thread, reason: str) -> None:
-    print(f"\n⛔  ABORT — {reason}")
+    print(f"\n  ABORT — {reason}")
     move_home(node, arm, "abort-home")
     rclpy.shutdown()
     spin_thread.join()
@@ -415,7 +415,7 @@ def main():
 
     # MoveIt2 must be built BEFORE the executor starts spinning.
     # (Avoids: RCLError: wait set index for status subscription out of bounds)
-    print("🔧  Initialising MoveIt2...")
+    print("  Initialising MoveIt2...")
     arm = MoveIt2(
         node=node,
         joint_names=JOINT_NAMES,
@@ -447,23 +447,23 @@ def main():
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    print("⏳  Waiting for ROS2 / MoveIt2 to settle... (5 s)")
+    print(" Waiting for ROS2 / MoveIt2 to settle... (5 s)")
     time.sleep(5.0)
 
     # Print live joint states — warns if wrist_3 is near ±π wrap zone
-    print("\n🔍  Reading current joint states...")
+    print("\n Reading current joint states...")
     current = get_current_joints(node)
     if current:
         for name, val in zip(JOINT_NAMES, current):
             print(f"    {name:30s}: {val:+.4f} rad  ({math.degrees(val):+.1f}°)")
         wrist3 = current[5]
         if abs(abs(wrist3) - math.pi) < 0.1:
-            print("\n   ⚠️   wrist_3 is near ±π — wrap ambiguity zone!")
+            print("\n     wrist_3 is near ±π — wrap ambiguity zone!")
             print("       Jog wrist_3 away from ±180° on the teach pendant then restart.")
     else:
-        print("   ⚠️   Could not read joint states — proceeding anyway")
+        print("     Could not read joint states — proceeding anyway")
 
-    print("\n🗺️   Setting up collision scene...")
+    print("\n  Setting up collision scene...")
     setup_collision_scene(arm)
     attach_camera_mount(node)
     time.sleep(1.0)
@@ -471,34 +471,34 @@ def main():
     pose_approach = make_pose(PICK_X, PICK_Y, PICK_Z + APPROACH_CLEARANCE)
     pose_pick     = make_pose(PICK_X, PICK_Y, PICK_Z)
 
-    print(f"\n📍  Pick point (base_link frame):")
+    print(f"\n Pick point (base_link frame):")
     print(f"    approach  X:{PICK_X:.3f}  Y:{PICK_Y:.3f}  Z:{PICK_Z + APPROACH_CLEARANCE:.3f}")
     print(f"    pick      X:{PICK_X:.3f}  Y:{PICK_Y:.3f}  Z:{PICK_Z:.3f}  ← verify before lowering")
     print(f"    table     Z:{TABLE_Z:.3f}")
-    print(f"\n📍  Place joint configs (degrees):")
+    print(f"\n Place joint configs (degrees):")
     print(f"    approach-1  {[round(math.degrees(j), 1) for j in PLACE_APPROACH1_JOINTS]}")
     print(f"    approach-2  {[round(math.degrees(j), 1) for j in PLACE_APPROACH2_JOINTS]}")
     print(f"    drop        {[round(math.degrees(j), 1) for j in PLACE_DROP_JOINTS]}")
-    print(f"\n⚠️   PICK_Z = {PICK_Z:.2f} m — verify TCP then lower in 2 cm steps")
-    print(f"⚠️   Speed: {VELOCITY_SCALE*100:.0f} % velocity / {ACCELERATION_SCALE*100:.0f} % acceleration\n")
+    print(f"\n   PICK_Z = {PICK_Z:.2f} m — verify TCP then lower in 2 cm steps")
+    print(f"  Speed: {VELOCITY_SCALE*100:.0f} % velocity / {ACCELERATION_SCALE*100:.0f} % acceleration\n")
 
     # ── STEP 1 — Home ───────────────────────────────────────────────────
-    print("▶  STEP 1 — Home (joint space)")
+    print("  STEP 1 — Home (joint space)")
     move_home(node, arm, "home")
     time.sleep(0.5)
 
     # ── STEP 2 — Approach pick ──────────────────────────────────────────
-    print(f"\n▶  STEP 2 — Approach pick ({APPROACH_CLEARANCE*100:.0f} cm above pick)")
+    print(f"\n STEP 2 — Approach pick ({APPROACH_CLEARANCE*100:.0f} cm above pick)")
     if not move_safe(node, arm, pose_approach, "approach"):
         abort(node, arm, spin_thread, "approach failed")
         return
 
-    print(f"\n   📡  Verify TCP:  ros2 topic echo /tcp_pose_broadcaster/pose --once")
+    print(f"\n   Verify TCP:  ros2 topic echo /tcp_pose_broadcaster/pose --once")
     print(f"   Expected Z ≈ {PICK_Z + APPROACH_CLEARANCE:.3f}")
     time.sleep(0.5)
 
     # ── STEP 3 — Descend to pick ────────────────────────────────────────
-    print("\n▶  STEP 3 — Descend to pick (Cartesian)")
+    print("\n  STEP 3 — Descend to pick (Cartesian)")
     if not move_cartesian(node, arm, pose_pick, "pick-descend"):
         move_cartesian(node, arm, pose_approach, "pick-retreat-fail")
         abort(node, arm, spin_thread, "pick descend failed")
@@ -507,28 +507,28 @@ def main():
     gripper_close()
 
     # ── STEP 4 — Retreat from pick ──────────────────────────────────────
-    print("\n▶  STEP 4 — Retreat from pick (Cartesian)")
+    print("\n STEP 4 — Retreat from pick (Cartesian)")
     if not move_cartesian(node, arm, pose_approach, "pick-retreat"):
         abort(node, arm, spin_thread, "pick retreat failed — object may be held")
         return
     time.sleep(0.3)
 
     # ── STEP 5 — Place approach-1 (safe intermediate) ───────────────────
-    print("\n▶  STEP 5 — Place approach-1 (safe intermediate posture)")
+    print("\n STEP 5 — Place approach-1 (safe intermediate posture)")
     if not move_joints(node, arm, PLACE_APPROACH1_JOINTS, "place-approach-1"):
         abort(node, arm, spin_thread, "place approach-1 failed — object still held")
         return
     time.sleep(0.3)
 
     # ── STEP 6 — Place approach-2 (above drop) ──────────────────────────
-    print("\n▶  STEP 6 — Place approach-2 (above drop location)")
+    print("\n STEP 6 — Place approach-2 (above drop location)")
     if not move_joints(node, arm, PLACE_APPROACH2_JOINTS, "place-approach-2"):
         abort(node, arm, spin_thread, "place approach-2 failed — object still held")
         return
     time.sleep(0.3)
 
     # ── STEP 7 — Descend to drop ────────────────────────────────────────
-    print("\n▶  STEP 7 — Descend to drop posture")
+    print("\n STEP 7 — Descend to drop posture")
     if not move_joints(node, arm, PLACE_DROP_JOINTS, "place-drop"):
         move_joints(node, arm, PLACE_APPROACH2_JOINTS, "place-retreat-fail")
         abort(node, arm, spin_thread, "place drop failed — object still held")
@@ -537,15 +537,15 @@ def main():
     gripper_open()
 
     # ── STEP 8 — Retreat from place ─────────────────────────────────────
-    print("\n▶  STEP 8 — Retreat to place approach-2")
+    print("\n STEP 8 — Retreat to place approach-2")
     move_joints(node, arm, PLACE_APPROACH2_JOINTS, "place-retreat")
     time.sleep(0.3)
 
     # ── STEP 9 — Return home ────────────────────────────────────────────
-    print("\n▶  STEP 9 — Return home (joint space)")
+    print("\n STEP 9 — Return home (joint space)")
     move_home(node, arm, "return-home")
 
-    print("\n🎉  Pick & place complete!\n")
+    print("\n Pick & place complete!\n")
     rclpy.shutdown()
     spin_thread.join()
 
